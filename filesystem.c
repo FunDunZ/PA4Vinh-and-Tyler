@@ -9,7 +9,6 @@
 // Current file position is set to byte 0.  Returns NULL on
 // error. Always sets 'fserror' global.
 File open_file(char *name, FileMode mode) {
-
 }
 
 // create and open new file with pathname 'name' and (implied) access
