@@ -8,13 +8,16 @@
 // open existing file with pathname 'name' and access mode 'mode'.
 // Current file position is set to byte 0.  Returns NULL on
 // error. Always sets 'fserror' global.
-File open_file(char *name, FileMode mode) {
-}
+File open_file(char *name, FileMode mode);
 
 // create and open new file with pathname 'name' and (implied) access
 // mode READ_WRITE.  Current file position is set to byte 0.  Returns
 // NULL on error. Always sets 'fserror' global.
-File create_file(char *name);
+File create_file(char *name) {
+    File file;
+    file = open_file(name, READ_WRITE);
+    return file;
+}
 
 // close 'file'.  Always sets 'fserror' global.
 void close_file(File file);
