@@ -8,6 +8,7 @@
 #include <string.h>
 #include <strings.h>
 #include "softwaredisk.c"
+#include "softwaredisk.h"
 
 char poetry[]="Do not go gentle into that good night,\n"
   "Old age should burn and rave at close of day;\n"
