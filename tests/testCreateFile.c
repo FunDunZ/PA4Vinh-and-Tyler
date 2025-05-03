@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include "filesystem.h"
-#include "softwaredisk.h"
-#include "softwaredisk.c"
+#include "../filesystem.h"
+#include "../softwaredisk.h"
+
 
 char poetry[]="WORK PLEASEEEEEEEEEEEE";
 

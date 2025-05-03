@@ -1,10 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "filesystem.h"
-#include "filesystem.c"
-#include "softwaredisk.h"
-#include "softwaredisk.c"
+#include "../filesystem.h"
+#include "../softwaredisk.h"
+
 
 int main() {
     // Run formatfs to initialize the filesystem

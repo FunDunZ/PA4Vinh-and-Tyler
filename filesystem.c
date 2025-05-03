@@ -5,6 +5,9 @@
 #include "softwaredisk.h"
 #include "filesystem.h"
 
+// Define the global error variable
+FSError fserror = FS_NONE;
+
 struct FileInternals {
     int inode_index;            // index in inode table
     FileMode user_mode;
@@ -106,11 +109,7 @@ int find_free_dir_entry() {
   int block = FIRST_DIR_ENTRY_BLOCK;
   for (block; block <= LAST_DIR_ENTRY_BLOCK; block++) {
     DirEntry entries[DIR_ENTRIES_PER_BLOCK];
-
-    if (!read_sd_block(entries, block)) {
-      fserror = FS_IO_ERROR;
-      return -1;
-    }
+    read_sd_block(entries, block);
 
     for (int i = 0; i < DIR_ENTRIES_PER_BLOCK; i++) {
       if (!entries[i].is_valid) {
@@ -121,19 +120,14 @@ int find_free_dir_entry() {
 
   fserror = FS_OUT_OF_SPACE;
   return -1;
-
 }
 
 // search for a directory entry by name
 // returns index of the entry if found, -1 if not
 int find_name_dir_entry(char *name) {
   int block = FIRST_DIR_ENTRY_BLOCK;
-    DirEntry entries[DIR_ENTRIES_PER_BLOCK];
-
-  if (!read_sd_block(entries, block)) {
-    fserror = FS_IO_ERROR;
-    return -1;
-  }
+  DirEntry entries[DIR_ENTRIES_PER_BLOCK];
+  read_sd_block(entries, block);
 
   for (int i = 0; i < DIR_ENTRIES_PER_BLOCK; i++) {
     if (entries[i].is_valid && (entries[i].name, name) == 0) {
@@ -144,7 +138,6 @@ int find_name_dir_entry(char *name) {
   fserror = FS_FILE_NOT_FOUND;
   return -1;
 }
-
 
 // gets index of searched file
 // returns 1 if success, 0 if not
@@ -161,10 +154,7 @@ int get_dir_entry(int index, DirEntry *entry) {
     
     // Read the block
     DirEntry entries[DIR_ENTRIES_PER_BLOCK];
-    if (!read_sd_block(entries, block)) {
-        fserror = FS_IO_ERROR;
-        return 0;
-    }
+    read_sd_block(entries, block);
     
     // Copy the entry to the parameter
     *entry = entries[offset];
@@ -184,19 +174,94 @@ int remove_dir_entry(const char *name);
 // Inode Functions
 
 // Find a free inode
-// returns 1 if success, 0 if not
-int find_free_inode();
-    // TODO: implement
+// returns inode number if success, 0 if not
+int find_free_inode() {
+    unsigned char inode_bitmap[SOFTWARE_DISK_BLOCK_SIZE];
+    read_sd_block(inode_bitmap, INODE_BITMAP_BLOCK);
+
+    int total_inodes = (LAST_INODE_BLOCK - FIRST_INODE_BLOCK + 1) * INODES_PER_BLOCK;
+
+    for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE; i++) {
+        // Check each byte for a free bit
+        if (inode_bitmap[i] != 0xFF) {
+            for (int j = 0; j < 8; j++) {
+                // If the bit is not set, we found a free inode
+                if (!(inode_bitmap[i] & (1 << j))) {
+                    int inode_num = i * 8 + j;
+                    if (inode_num < total_inodes) {  // Make sure we're within valid range
+                        fserror = FS_NONE;
+                        return inode_num;
+                    }
+                }
+            }
+        }
+    }
+    fserror = FS_OUT_OF_SPACE;
+    return 0;
+}
 
 // Allocate an inode
 // returns 1 if success, 0 if not
-int allocate_inode(int inode_num);
-    // TODO: implement
+int allocate_inode(int inode_num) {
+    int total_inodes = (LAST_INODE_BLOCK - FIRST_INODE_BLOCK + 1) * INODES_PER_BLOCK;
+    
+    if (inode_num < 0 || inode_num >= total_inodes) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    unsigned char inode_bitmap[SOFTWARE_DISK_BLOCK_SIZE];
+    read_sd_block(inode_bitmap, INODE_BITMAP_BLOCK);
+
+    // Calculate byte and bit position in bitmap
+    int byte_index = inode_num / 8;
+    int bit_index = inode_num % 8;
+
+    // if allocated already return an error
+    if (inode_bitmap[byte_index] & (1 << bit_index)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    inode_bitmap[byte_index] |= (1 << bit_index);
+    write_sd_block(inode_bitmap, INODE_BITMAP_BLOCK);
+
+    fserror = FS_NONE;
+    return 1;
+}
 
 // Free an inode
 // Returns 1 on success, 0 on failure
-int free_inode(int inode_num);
-    // TODO: implement
+int free_inode(int inode_num) {
+    int total_inodes = (LAST_INODE_BLOCK - FIRST_INODE_BLOCK + 1) * INODES_PER_BLOCK;
+    
+    if (inode_num < 0 || inode_num >= total_inodes) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    unsigned char inode_bitmap[SOFTWARE_DISK_BLOCK_SIZE];
+    read_sd_block(inode_bitmap, INODE_BITMAP_BLOCK);
+
+    // Calculate byte and bit position in bitmap
+    int byte_index = inode_num / 8;
+    int bit_index = inode_num % 8;
+
+
+    // Check if block is already free
+    if (!(inode_bitmap[byte_index] & (1 << bit_index))) {
+        fserror = FS_NONE;  // Not an error, just already free
+        return 1;  // Return success since the block is already free
+    }
+
+    // Clear the bit to mark the block as free
+    inode_bitmap[byte_index] &= ~(1 << bit_index);
+    write_sd_block(inode_bitmap, INODE_BITMAP_BLOCK);
+
+    fserror = FS_NONE;
+    return 1;
+
+}
 
 // Get an inode by number
 // Returns 1 on success, 0 on failure
@@ -211,21 +276,86 @@ int write_inode(int inode_num, const Inode *inode);
 // Data Block Functions
 
 // Find a free data block
-// Returns the index of a free data block, or -1 if none are available
-int find_free_data_block();
-    // TODO: implement
+// Returns the index of a free data block, or 0 if none are available
+int find_free_data_block() {
+    unsigned char data_bitmap[SOFTWARE_DISK_BLOCK_SIZE];
+    read_sd_block(data_bitmap, DATA_BITMAP_BLOCK);
+
+    for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE; i++) {
+        // I/O measures 8 bits at a time, so I have to look for each bit individually
+        // with another for loop
+        if (data_bitmap[i] != 0xFF) {
+            for (int j = 0; j < 8; j++) {
+                // So if the data bitmap[i] = 1011111, j is going to repeat until it hits the 0,
+                if (!(data_bitmap[i] & (1 << j))) {
+                    fserror = FS_NONE;
+                    return (i * 8 + j) + FIRST_DATA_BLOCK;
+                }
+            }
+        }
+    }
+    fserror = FS_OUT_OF_SPACE;
+    return 0;
+}
 
 // Allocate a data block
 // Returns 1 on success, 0 on failure
-int allocate_data_block(int block_num);
-    // TODO: implement
+int allocate_data_block(int block_num) {
+    if (block_num < FIRST_DATA_BLOCK || block_num > LAST_DATA_BLOCK) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    unsigned char data_bitmap[SOFTWARE_DISK_BLOCK_SIZE];
+    read_sd_block(data_bitmap, DATA_BITMAP_BLOCK);
+
+    // Calculate relative position from start of data blocks
+    int relative_block = block_num - FIRST_DATA_BLOCK;
+    int byte_index = relative_block / 8;
+    int bit_index = relative_block % 8;
+
+    // if allocated already return an error
+    if (data_bitmap[byte_index] & (1 << bit_index)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    data_bitmap[byte_index] |= (1 << bit_index);
+    write_sd_block(data_bitmap, DATA_BITMAP_BLOCK);
+
+    fserror = FS_NONE;
+    return 1;
+}
 
 // Free a data block
 // Returns 1 on success, 0 on failure
-int free_data_block(int block_num);
-    // TODO: implement
+int free_data_block(int block_num) {
+    if (block_num < FIRST_DATA_BLOCK || block_num > LAST_DATA_BLOCK) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
 
+    unsigned char data_bitmap[SOFTWARE_DISK_BLOCK_SIZE];
+    read_sd_block(data_bitmap, DATA_BITMAP_BLOCK);
 
+    // Calculate relative position from start of data blocks
+    int relative_block = block_num - FIRST_DATA_BLOCK;
+    int byte_index = relative_block / 8;
+    int bit_index = relative_block % 8;
+
+    // Check if block is already free
+    if (!(data_bitmap[byte_index] & (1 << bit_index))) {
+        fserror = FS_NONE;  // Not an error, just already free
+        return 1;  // Return success since the block is already free
+    }
+
+    // Clear the bit to mark the block as free
+    data_bitmap[byte_index] &= ~(1 << bit_index);
+    write_sd_block(data_bitmap, DATA_BITMAP_BLOCK);
+
+    fserror = FS_NONE;
+    return 1;
+}
 
 // Just for clarification on when I use Superblock
 int write_superblock(const Superblock *sb) {
