@@ -70,28 +70,165 @@ int seek_file(File file, unsigned long bytepos) {
 // returns the current length of the file in bytes. Always sets
 // 'fserror' global.
 unsigned long file_length(File file) {
-    // TODO: implement
-    return 0;
+    //First we need to check to make sure the file exists
+    if (!file_exists(file)) {
+        fserror = FS_FILE_NOT_FOUND;
+        return 0;
+    }
+
+    //Now that we know the file exists, we need to get the inode
+    int fileInode = file->inode_index;
+    Inode exInode;
+
+    //Now we need to get the inode
+    //Nest with an if to check for IO error
+
+    if (!get_inode(fileInode, &exInode)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //If we have made it here, we saved our inode info from our file
+    //into the exInode of type Inode
+
+    //Now we need to read the size and return it
+    return exInode.file_size;
 }
 
 // deletes the file named 'name', if it exists. Returns 1 on success,
 // 0 on failure.  Always sets 'fserror' global.
 int delete_file(char *name) {
-    // TODO: implement
-    return 0;
+    //First we need to check to make sure that the name is valid
+    if (name == NULL || strlen(name) == 0 || strlen(name) > MAX_FILENAME_SIZE) {
+        fserror = FS_ILLEGAL_FILENAME;
+        return 0;
+    }
+
+    //Now we need to check to make sure that the file exists
+    if (!file_exists(name)) {
+        fserror = FS_FILE_NOT_FOUND;
+        return 0;
+    }
+
+    //***** I THINK WE NEED TO CHECK IF THE FILE IS OPEN, BUT IDK HOW
+
+
+    //Now we have confirmed that the file exists and the name is valid
+    //Now we must proceed with the deletion
+
+    //First we need to find the directory index
+    int dir_index = find_name_dir_entry(name);
+    if (dir_index == -1) {
+        fserror = FS_FILE_NOT_FOUND;
+        return 0;
+    }
+
+    //Now we need to get the directory entry at that index in order to get the inode
+    DirEntry dirForFileDelete;
+    if (!get_dir_entry(dir_index, &dirForFileDelete)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+    int inode_number = dirForFileDelete.inode_number;
+
+    //Now we need to find the inode that contains our file
+    Inode fileInode;
+    if (!get_inode(inode_number, &fileInode)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we need to free the data blocks, both direct and indirect
+    //by freeing the data for all blocks
+    for (int i = 0; i < NUM_DIRECT_INODE_BLOCKS; i++) {
+        if (fileInode.direct_blocks[i] != 0) {
+            free_data_block(fileInode.direct_blocks[i]);
+        }
+    }
+    if (fileInode.indirect_block != 0) {
+        int indirect_blocks[NUM_SINGLE_INDIRECT_BLOCKS];
+        if (read_sd_block(indirect_blocks, fileInode.indirect_block)) {
+            for (int i = 0; i < NUM_SINGLE_INDIRECT_BLOCKS; i++) {
+                if (indirect_blocks[i] != 0) {
+                    free_data_block(indirect_blocks[i]);
+                }
+            }
+        }
+        free_data_block(fileInode.indirect_block);
+    }
+
+    //Now that we have freed all the datablocks associated, we need to free the inode
+    free_inode(inode_number);
+
+    //Now that the inode was freed, we need to remove the directory entry
+    remove_dir_entry(name);
+
+    //We have successfully removed the file
+    fserror = FS_NONE;
+    return 1;
 }
 
 // determines if a file with 'name' exists and returns 1 if it exists, otherwise 0.
 // Always sets 'fserror' global.
 int file_exists(char *name) {
-    // TODO: implement
-    return 0;
+    //First we need to check to make sure that the name is valid
+    if (name == NULL || strlen(name) == 0 || strlen(name) > MAX_FILENAME_SIZE) {
+        fserror = FS_ILLEGAL_FILENAME;
+        return 0;
+    }
+
+    //Now that we have confirmed the name is valid
+    //We can try to find a directory that has the same name 
+    int dir_index = find_name_dir_entry(name);
+    //if we have an index that is valid, we have a directory under the same
+    //name so the file exists
+    if (dir_index != -1) {
+        fserror = FS_NONE;
+        return 1;
+    }
+    else {
+        fserror = FS_FILE_NOT_FOUND;
+        return 0;
+    }
 }
 
 // describe current filesystem error code by printing a descriptive
 // message to standard error.
 void fs_print_error(void) {
-    // TODO: implement
+    //Here we are going to check and print based off of the errors
+    if (fserror == FS_EXCEEDS_MAX_FILE_SIZE) {
+        printf("File has exceeded maximum size.\n");
+    }
+    else if (fserror == FS_FILE_ALREADY_EXISTS) {
+        printf("The file alreaady exists.\n");
+    }
+    else if (fserror == FS_FILE_NOT_FOUND) {
+        printf("The file was not found.\n");
+    }
+    else if (fserror == FS_FILE_NOT_OPEN) {
+        printf("The file is not open.\n");
+    }
+    else if (fserror == FS_FILE_OPEN) {
+        printf("The file is already open.\n");
+    }
+    else if (fserror == FS_FILE_READ_ONLY) {
+        printf("The file is read only access.\n");
+    }
+    else if (fserror == FS_ILLEGAL_FILENAME) {
+        printf("The file has an illegal file name.\n");
+    }
+    else if (fserror == FS_IO_ERROR) {
+        printf("The file has an I/O error.\n");
+    }
+    else if (fserror == FS_OUT_OF_SPACE) {
+        printf("The disk is out of space.\n");
+    }
+    else if (fserror == FS_NONE) {
+        printf("There is no error.\n");
+    }
+    else {
+        printf("Unknown error, something went wrong.\n");
+    }
 }
 
 // extra function to make sure structure alignment, data structure
@@ -165,13 +302,111 @@ int get_dir_entry(int index, DirEntry *entry) {
 
 // add a directory entry
 // returns 1 if success, 0 if not
-int add_dir_entry(char *name, unsigned long inode_index);
-    // TODO: implement
+int add_dir_entry(char *name, unsigned long inode_index) {
+
+    //First we need to check to make sure that the name is valid
+    if (name == NULL || strlen(name) == 0 || strlen(name) > MAX_FILENAME_SIZE) {
+        fserror = FS_ILLEGAL_FILENAME;
+        return 0;
+    }
+
+    //Next we need to check to see if the inode is valid
+    int total_inodes = (LAST_INODE_BLOCK - FIRST_INODE_BLOCK + 1) * INODES_PER_BLOCK;
+    
+    if (inode_index < 0 || inode_index >= total_inodes) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we need to check if the file already exists
+    if (find_name_dir_entry(name) != -1) {
+        fserror = FS_FILE_ALREADY_EXISTS;
+        return 0;
+    }
+
+    //Now we need to find the free directory to place the new one
+    int dir_index = find_free_dir_entry();
+    //If the index is negative 1, we have no more room to place the directory
+    if (dir_index == -1) {
+        fserror = FS_OUT_OF_SPACE;
+        return 0;
+    }
+
+    //find the block of directories and the offset where we need to place the new one
+    int blk = FIRST_DIR_ENTRY_BLOCK + (dir_index / DIR_ENTRIES_PER_BLOCK);
+    int off = dir_index % DIR_ENTRIES_PER_BLOCK;
+
+    //Now we need to read the entire block so we can place our directory into the block
+    DirEntry dir_block[DIR_ENTRIES_PER_BLOCK];
+    //Add the if so if the read fails we add the error
+    if (!read_sd_block(dir_block, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we need to place the information in our new directory
+    strncpy(dir_block[off].name, name, MAX_FILENAME_SIZE -1);
+    dir_block[off].name[MAX_FILENAME_SIZE - 1] = '\0';
+    dir_block[off].inode_number = inode_index;
+    dir_block[off].is_valid = 1;
+
+    //Now we need to write our new directory entry back into the block
+    //nest in an if to catch if the write fails
+    if (!write_sd_block(dir_block, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we have successfully made it through the add, so we return no error and 1
+    fserror = FS_NONE;
+    return 1;
+}
 
 // removes a directory entry
 // returns 1 if success, 0 if not
-int remove_dir_entry(const char *name);
-    // TODO: implement
+int remove_dir_entry(const char *name) {
+    //First we need to check to make sure that the name is valid
+    if (name == NULL || strlen(name) == 0 || strlen(name) > MAX_FILENAME_SIZE) {
+        fserror = FS_ILLEGAL_FILENAME;
+        return 0;
+    }
+
+    //Now we know the name is valid, so we need to get the index of the directory
+    int dir_index = find_name_dir_entry(name);
+    //Check to make sure the file was found
+    if (dir_index == -1) {
+        fserror = FS_FILE_NOT_FOUND;
+        return 0;
+    }
+
+    //find the block of directories and the offset where we need to remove the old
+    int blk = FIRST_DIR_ENTRY_BLOCK + (dir_index / DIR_ENTRIES_PER_BLOCK);
+    int off = dir_index % DIR_ENTRIES_PER_BLOCK;
+
+    //Now we need to read the entire block so we can remove the old directory
+    DirEntry dir_block[DIR_ENTRIES_PER_BLOCK];
+    //Add the if so if the read fails we add the error
+    if (!read_sd_block(dir_block, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we are going to take our entry and make it not valid
+    dir_block[off].is_valid = 0;
+    dir_block[off].name[0] = '\0';
+    dir_block[off].inode_number = 0;
+
+    //Now we write the entry that has been made invalid back to the block
+    //nest in an if to catch if the write fails
+    if (!write_sd_block(dir_block, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we have successfully made it through the add, so we return no error and 1
+    fserror = FS_NONE;
+    return 1;
+}
 
 // Inode Functions
 
