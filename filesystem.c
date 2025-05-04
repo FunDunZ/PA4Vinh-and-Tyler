@@ -12,6 +12,7 @@ struct FileInternals {
     int inode_index;            // index in inode table
     FileMode user_mode;
     unsigned long position;    // current position in file
+    int d;                      
 
 };
 
@@ -21,6 +22,7 @@ struct FileInternals {
 // error. Always sets 'fserror' global.
 File open_file(char *name, FileMode mode) {
     // TODO: implement
+
     return NULL;
 }
 
@@ -265,13 +267,82 @@ int free_inode(int inode_num) {
 
 // Get an inode by number
 // Returns 1 on success, 0 on failure
-int get_inode(int inode_num, Inode *inode);
-    // TODO: implement
+int get_inode(int inode_num, Inode *inode) {
+    
+    //First we have to find the total number of inodes
+    int total = (LAST_INODE_BLOCK - FIRST_INODE_BLOCK + 1) * INODES_PER_BLOCK;
+
+    //Now we check if our inode number is valid and in range
+    if (inode_num < 0 || inode_num >= total) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we find the block that our inode is in, and the offset of where it is
+    //in the block
+    int blk = FIRST_INODE_BLOCK + (inode_num / INODES_PER_BLOCK);
+    int off = inode_num % INODES_PER_BLOCK;
+
+    Inode blk_inodes[INODES_PER_BLOCK];
+
+    if (!read_sd_block(blk_inodes, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we copy the inode at the offset to the output 
+    //This copies our inode from the block at the offset and places
+    //it into the output pointer so we have "gotten" our inode
+    *inode = blk_inodes[off];
+
+    fserror = FS_NONE;
+    return 1;
+}
+
 
 // Write an inode by number
 // Returns 1 on success, 0 on failure
-int write_inode(int inode_num, const Inode *inode);
-    // TODO: implement
+int write_inode(int inode_num, const Inode *inode) {
+
+    //First we find the total number of inodes that we can have
+    int total = (LAST_INODE_BLOCK - FIRST_INODE_BLOCK + 1) * INODES_PER_BLOCK;
+
+    //Now we check if our inode number is valid and it fits in our range
+    if (inode_num < 0 || inode_num >= total) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we find the block that our inode is in, and the offset of where it is
+    //in the block
+    int blk = FIRST_INODE_BLOCK + (inode_num / INODES_PER_BLOCK);
+    int off = inode_num % INODES_PER_BLOCK;
+
+    //After that, we create a new variable blk_inodes of all the inodes per block
+    Inode blk_inodes[INODES_PER_BLOCK];
+    
+    //Now we attempt to read the sd block in our block and the inodes in that block
+    //if we don'd find, we set the error
+    if (!read_sd_block(blk_inodes, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we replace the inode at the offset in our block of inodes to the inode from 
+    //our parameters
+    blk_inodes[off] = *inode;
+
+    //lastly we perform the write using sd to write all of the blk_inodes back to the block
+    //after we just replaced our inode. If this fails, we catch using the if and give an error
+    if (!write_sd_block(blk_inodes, blk)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    fserror = FS_NONE;
+    return 1;
+
+}
 
 // Data Block Functions
 
