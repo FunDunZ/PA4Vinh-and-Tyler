@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "filesystem.h"
+//#include "filesystem.h"
 #include "filesystem.c"
-#include "softwaredisk.h"
+//#include "softwaredisk.h"
 #include "softwaredisk.c"
 
 int main() {

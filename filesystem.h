@@ -32,6 +32,7 @@
 // private
 struct FileInternals;
 
+
 // file type used by user code
 typedef struct FileInternals* File;
 
@@ -148,7 +149,7 @@ int find_free_dir_entry();
 
 // search for a directory entry by name
 // returns 1 if success, 0 if not
-int find_name_dir_entry(char *name);
+int find_name_dir_entry(const char *name);
 
 // gets index of searched file
 // returns 1 if success, 0 if not

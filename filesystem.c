@@ -5,6 +5,9 @@
 #include "softwaredisk.h"
 #include "filesystem.h"
 
+//Define a new minimum function
+  #define min(a, b) ((a) < (b) ? (a) : (b))
+
 // Define the global error variable
 FSError fserror = FS_NONE;
 
@@ -43,7 +46,7 @@ File open_file(char *name, FileMode mode) {
     int inode_num = fileEntry.inode_number;
 
     //Now we need to set all of the file parameters
-    File exFile = malloc(sizeof(FileInternals));
+    File exFile = malloc(sizeof(struct FileInternals));
     exFile->inode_index = inode_num;
     exFile->user_mode = mode;
     exFile->position = 0;
@@ -107,7 +110,7 @@ File create_file(char *name) {
     }
 
     //Now we need to create the new file
-    File exFile = malloc(sizeof(FileInternals));
+    File exFile = malloc(sizeof(struct FileInternals));
     if (exFile == NULL) {
         fserror = FS_IO_ERROR;
         return NULL;
@@ -144,7 +147,7 @@ unsigned long read_file(File file, void *buf, unsigned long numbytes) {
     //First we need to check to make sure the file is valid
     if (file == NULL) {
         fserror = FS_FILE_NOT_OPEN;
-        return;
+        return 0;
     }
 
     //Now we need to get the indoe so that way we can get the information
@@ -216,7 +219,7 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes) {
     //First we need to check to make sure the file is valid
     if (file == NULL) {
         fserror = FS_FILE_NOT_OPEN;
-        return;
+        return 0;
     }
 
     //Now we need to check to make sure the mode is correct
@@ -274,13 +277,13 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes) {
                 inodeOfFile.indirect_block = new_indir;
 
                 int zeros[NUM_SINGLE_INDIRECT_BLOCKS] = {0};
-                write_sd_block[zeros, new_indir];
+                write_sd_block(zeros, new_indir);
             }
             int indir_blk_array[NUM_SINGLE_INDIRECT_BLOCKS];
-            read_sd_block[indir_blk_array, inodeOfFile.indirect_block];
+            read_sd_block(indir_blk_array, inodeOfFile.indirect_block);
             int indir_indx = blk - NUM_DIRECT_INODE_BLOCKS;
             if (indir_blk_array[indir_indx] == 0) {
-                int new_blk = find_free_data_block;
+                int new_blk = find_free_data_block();
                 if (new_blk == -1) {
                     fserror = FS_OUT_OF_SPACE;
                     break;
@@ -426,7 +429,7 @@ int seek_file(File file, unsigned long bytepos) {
 // 'fserror' global.
 unsigned long file_length(File file) {
     //First we need to check to make sure the file exists
-    if (!file_exists(file)) {
+    if (file == NULL) {
         fserror = FS_FILE_NOT_FOUND;
         return 0;
     }
@@ -591,7 +594,17 @@ void fs_print_error(void) {
 // success, 0 on failure.  This should be used in disk initialization
 // to ensure that everything will work correctly.
 int check_structure_alignment(void) {
-    // TODO: implement
+
+    //Check to make sure the inode size fits in the blocks correctly
+    if (sizeof(Inode) * INODES_PER_BLOCK != SOFTWARE_DISK_BLOCK_SIZE) {
+        return 0;
+    }
+
+    //Check to make sure the directory size fits in the blocks correctly
+    if (sizeof(DirEntry) * DIR_ENTRIES_PER_BLOCK != SOFTWARE_DISK_BLOCK_SIZE) {
+        return 0;
+    }
+
     return 1;
 }
 
@@ -600,8 +613,8 @@ int check_structure_alignment(void) {
 // find a directory entry
 // returns index of the free entry if found, -1 if not
 int find_free_dir_entry() {
-  int block = FIRST_DIR_ENTRY_BLOCK;
-  for (block; block <= LAST_DIR_ENTRY_BLOCK; block++) {
+
+  for (int block = FIRST_DIR_ENTRY_BLOCK; block <= LAST_DIR_ENTRY_BLOCK; block++) {
     DirEntry entries[DIR_ENTRIES_PER_BLOCK];
     read_sd_block(entries, block);
 
@@ -618,13 +631,13 @@ int find_free_dir_entry() {
 
 // search for a directory entry by name
 // returns index of the entry if found, -1 if not
-int find_name_dir_entry(char *name) {
+int find_name_dir_entry(const char *name) {
   int block = FIRST_DIR_ENTRY_BLOCK;
   DirEntry entries[DIR_ENTRIES_PER_BLOCK];
   read_sd_block(entries, block);
 
   for (int i = 0; i < DIR_ENTRIES_PER_BLOCK; i++) {
-    if (entries[i].is_valid && (entries[i].name, name) == 0) {
+    if (entries[i].is_valid && strcmp(entries[i].name, name) == 0) {
       return (block - FIRST_DIR_ENTRY_BLOCK) * DIR_ENTRIES_PER_BLOCK + i;
     }
   }
