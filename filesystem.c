@@ -11,8 +11,7 @@ FSError fserror = FS_NONE;
 struct FileInternals {
     int inode_index;            // index in inode table
     FileMode user_mode;
-    unsigned long position;    // current position in file
-    int d;                      
+    unsigned long position;    // current position in file                  
 
 };
 
@@ -21,23 +20,120 @@ struct FileInternals {
 // Current file position is set to byte 0.  Returns NULL on
 // error. Always sets 'fserror' global.
 File open_file(char *name, FileMode mode) {
-    // TODO: implement
+    //First we need to check to make sure that the name is valid
+    if (name == NULL || strlen(name) == 0 || strlen(name) > MAX_FILENAME_SIZE) {
+        fserror = FS_ILLEGAL_FILENAME;
+        return NULL;
+    }
 
-    return NULL;
+    //Now that we have confirmed the name is valid, we need to make sure the file exists
+    int dir_index = find_name_dir_entry(name);
+    if (dir_index == -1) {
+        fserror = FS_FILE_NOT_FOUND;
+        return NULL;
+    }
+
+    //Now we need to get the directory entry to eventually get the inode
+    DirEntry fileEntry;
+    if (!get_dir_entry(dir_index, &fileEntry)) {
+        fserror = FS_IO_ERROR;
+        return NULL;
+    }
+    //Now that we have gotten the directory entry we need the inode
+    int inode_num = fileEntry.inode_number;
+
+    //Now we need to set all of the file parameters
+    File exFile = malloc(sizeof(FileInternals));
+    exFile->inode_index = inode_num;
+    exFile->user_mode = mode;
+    exFile->position = 0;
+
+
+    fserror = FS_NONE;
+    return (File)exFile;
 }
 
 // create and open new file with pathname 'name' and (implied) access
 // mode READ_WRITE.  Current file position is set to byte 0.  Returns
 // NULL on error. Always sets 'fserror' global.
 File create_file(char *name) {
+    //First we need to check to make sure that the name is valid
+    if (name == NULL || strlen(name) == 0 || strlen(name) > MAX_FILENAME_SIZE) {
+        fserror = FS_ILLEGAL_FILENAME;
+        return NULL;
+    }
 
-    // TODO: implement
-    return NULL;
+    //Now we need to check to make sure the file doesn't already exist
+    if (file_exists(name)) {
+        fserror = FS_FILE_ALREADY_EXISTS;
+        return NULL;
+    }
+
+    //Now we need to create the directory entry to eventually get the inode
+    int dir_index = find_free_dir_entry();
+    if (dir_index == -1) {
+        fserror = FS_OUT_OF_SPACE;
+        return NULL;
+    }
+ 
+
+    //Now that we have created the directory entry we need to create the new inode
+    int inode_num = find_free_inode();
+    if (inode_num == -1) {
+        fserror = FS_OUT_OF_SPACE;
+        return NULL;
+    }
+ 
+    //Now we need to allocate the new inode amd create the new one
+    allocate_inode(inode_num);
+    Inode newInode;
+    newInode.inode_number = inode_num;
+    newInode.file_size = 0;
+    for (int i = 0; i < NUM_DIRECT_INODE_BLOCKS; i++) {
+        newInode.direct_blocks[i] = 0;
+    }
+    newInode.indirect_block = 0;
+
+    //Now we need to write it to our disk
+    if (!write_inode(inode_num, &newInode)) {
+        fserror = FS_IO_ERROR;
+        return NULL;
+    }
+
+    //Lastly before creating the file, we add the directory entry
+    if (!add_dir_entry(name, inode_num)) {
+        fserror = FS_OUT_OF_SPACE;
+        return NULL;
+    }
+
+    //Now we need to create the new file
+    File exFile = malloc(sizeof(FileInternals));
+    if (exFile == NULL) {
+        fserror = FS_IO_ERROR;
+        return NULL;
+    }
+    exFile->inode_index = inode_num;
+    exFile->user_mode = READ_WRITE;
+    exFile->position = 0;
+
+    //Now that we have created our new file, we return the pointer to the file
+    fserror = FS_NONE;
+    return (File)exFile;
 }
 
 // close 'file'.  Always sets 'fserror' global.
 void close_file(File file) {
-    // TODO: implement
+    //First we need to check to make sure the file is valid
+    if (file == NULL) {
+        fserror = FS_FILE_NOT_OPEN;
+        return;
+    }
+
+    //Now that we have confirmed that the file is valid, we free it and proceed
+    free(file);
+
+    fserror = FS_NONE;
+    return;
 }
 
 // read at most 'numbytes' of data from 'file' into 'buf', starting at the 
@@ -45,8 +141,71 @@ void close_file(File file) {
 // then a return value less than 'numbytes' signals this condition. Always sets
 // 'fserror' global.
 unsigned long read_file(File file, void *buf, unsigned long numbytes) {
-    // TODO: implement
-    return 0;
+    //First we need to check to make sure the file is valid
+    if (file == NULL) {
+        fserror = FS_FILE_NOT_OPEN;
+        return;
+    }
+
+    //Now we need to get the indoe so that way we can get the information
+    Inode inodeOfFile;
+    if (!get_inode(file->inode_index, &inodeOfFile)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Now we need to make sure our posiition is valid
+    if (file->position >= inodeOfFile.file_size) {
+        fserror = FS_OUT_OF_SPACE;
+        return 0;
+    }
+
+    //Now we need to figure out the bytes to read
+    unsigned long bytes_available = inodeOfFile.file_size - file->position;
+    unsigned long bytes_to_read = min(numbytes, bytes_available);
+    unsigned long bytes_read = 0;
+    unsigned char *dst = (unsigned char *)buf;
+
+    //Here we set up a while loop to ensure that we read all bytes needed
+    while (bytes_read < bytes_to_read) {
+        unsigned long cur_position = file->position + bytes_read;
+        int blk = cur_position / SOFTWARE_DISK_BLOCK_SIZE;
+        int off = cur_position % SOFTWARE_DISK_BLOCK_SIZE;
+
+        int blk_num;
+        if (blk < NUM_DIRECT_INODE_BLOCKS) {
+            blk_num = inodeOfFile.direct_blocks[blk];
+        }
+        else {
+            int indirect_block_array[NUM_SINGLE_INDIRECT_BLOCKS];
+            int indirect_loaded = 0;
+            if (!indirect_loaded) {
+                if (!read_sd_block(indirect_block_array, inodeOfFile.indirect_block)) {
+                    fserror = FS_IO_ERROR;
+                    return bytes_read;
+                }
+                indirect_loaded = 1;
+            }
+            int indir_indx = blk - NUM_DIRECT_INODE_BLOCKS;
+            blk_num = indirect_block_array[indir_indx];
+        }
+
+        unsigned char blk_buf[SOFTWARE_DISK_BLOCK_SIZE];
+        if (!read_sd_block(blk_buf, blk_num)) {
+            fserror = FS_IO_ERROR;
+            return bytes_read;
+        }
+
+        int bytes_in_blk = min(SOFTWARE_DISK_BLOCK_SIZE - off, bytes_to_read - bytes_read);
+
+        memcpy(dst + bytes_read, blk_buf + off, bytes_in_blk);
+
+        bytes_read += bytes_in_blk;
+    }
+    file->position += bytes_read;
+
+    fserror = FS_NONE;
+    return bytes_read;
 }
 
 // write 'numbytes' of data from 'buf' into 'file' at the current file
@@ -54,8 +213,120 @@ unsigned long read_file(File file, void *buf, unsigned long numbytes) {
 // error, the return value may be less than 'numbytes'.  Always sets
 // 'fserror' global.
 unsigned long write_file(File file, void *buf, unsigned long numbytes) {
-    // TODO: implement
-    return 0;
+    //First we need to check to make sure the file is valid
+    if (file == NULL) {
+        fserror = FS_FILE_NOT_OPEN;
+        return;
+    }
+
+    //Now we need to check to make sure the mode is correct
+    if (file->user_mode != READ_WRITE) {
+        fserror = FS_FILE_READ_ONLY;
+        return 0;
+    }
+
+    //Now we need to get the indoe so that way we can get the information
+    Inode inodeOfFile;
+    if (!get_inode(file->inode_index, &inodeOfFile)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }   
+
+    //Now we need to find the total bytes the file can hold
+    unsigned long max_bytes = MAX_FILE_SIZE - file->position;
+    unsigned long bytes_to_write = min(numbytes, max_bytes);
+    if (bytes_to_write == 0) {
+        fserror = FS_EXCEEDS_MAX_FILE_SIZE;
+        return 0;
+    }
+
+    unsigned long bytes_written = 0;
+    unsigned char *source = (unsigned char *)buf;
+
+    //Now we need to do the loop for the write, under a while so we finish the whole write
+    while (bytes_written < bytes_to_write) {
+        unsigned long cur_position = file->position + bytes_written;
+        int blk = cur_position / SOFTWARE_DISK_BLOCK_SIZE;
+        int off = cur_position % SOFTWARE_DISK_BLOCK_SIZE;
+
+        //Here we are going to do all of the block information with direct and indirect
+        int blk_num;
+        if (blk < NUM_DIRECT_INODE_BLOCKS) {
+            if (inodeOfFile.direct_blocks[blk] == 0) {
+                int new_blk = find_free_data_block();
+                if (new_blk == -1) {
+                    fserror = FS_OUT_OF_SPACE;
+                    break;
+                }
+                allocate_data_block(new_blk);
+                inodeOfFile.direct_blocks[blk] = new_blk;
+            }
+            blk_num = inodeOfFile.direct_blocks[blk];
+        }
+        else {
+            if (inodeOfFile.indirect_block == 0) {
+                int new_indir = find_free_data_block();
+                if (new_indir == -1) {
+                    fserror = FS_OUT_OF_SPACE;
+                    break;
+                }
+                allocate_data_block(new_indir);
+                inodeOfFile.indirect_block = new_indir;
+
+                int zeros[NUM_SINGLE_INDIRECT_BLOCKS] = {0};
+                write_sd_block[zeros, new_indir];
+            }
+            int indir_blk_array[NUM_SINGLE_INDIRECT_BLOCKS];
+            read_sd_block[indir_blk_array, inodeOfFile.indirect_block];
+            int indir_indx = blk - NUM_DIRECT_INODE_BLOCKS;
+            if (indir_blk_array[indir_indx] == 0) {
+                int new_blk = find_free_data_block;
+                if (new_blk == -1) {
+                    fserror = FS_OUT_OF_SPACE;
+                    break;
+                }
+                allocate_data_block(new_blk);
+                indir_blk_array[indir_indx] = new_blk;
+                write_sd_block(indir_blk_array, inodeOfFile.indirect_block);
+            }
+            blk_num = indir_blk_array[indir_indx];
+        }
+
+        //Now we read the block from the disk
+        unsigned char blk_buf[SOFTWARE_DISK_BLOCK_SIZE];
+        read_sd_block(blk_buf, blk_num);
+
+        //How many bytes are in the block
+        int bytes_in_blk = min(SOFTWARE_DISK_BLOCK_SIZE - off, bytes_to_write - bytes_written);
+
+        //Copy from the source to write into the block buffer so it can be written
+        memcpy(blk_buf + off, source + bytes_written, bytes_in_blk);
+
+        //Now we write the block into the disk again
+        write_sd_block(blk_buf, blk_num);
+
+        //Add to the bytes written
+        bytes_written += bytes_in_blk;
+    }
+
+    //Set our new position in the file to reflect how far we wrote
+    unsigned long new_pos = file->position + bytes_written;
+    if (new_pos > inodeOfFile.file_size) {
+        inodeOfFile.file_size = new_pos;
+    }
+
+    file->position = new_pos;
+
+    //Now we write the inode back to the file and check to make sure we didn't run out of space
+    write_inode(file->inode_index, &inodeOfFile);
+
+    if (bytes_written == bytes_to_write) {
+        fserror = FS_NONE;
+    }
+    else  {
+        fserror = FS_OUT_OF_SPACE;
+    }
+    return bytes_written;
 }
 
 // sets current position in file to 'bytepos', always relative to the
@@ -63,8 +334,92 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes) {
 // extend the file. Returns 1 on success and 0 on failure.  Always
 // sets 'fserror' global.
 int seek_file(File file, unsigned long bytepos) {
-    // TODO: implement
-    return 0;
+    //First we need to check to make sure the file is valid
+    if (file == NULL) {
+        fserror = FS_FILE_NOT_OPEN;
+        return 0;
+    }
+
+    //Now we need to verify our byteposition is valid
+    if (bytepos > MAX_FILE_SIZE) {
+        fserror = FS_EXCEEDS_MAX_FILE_SIZE;
+        return 0;
+    }
+
+    //Now we need to get the inode
+    Inode inodeOfFile;
+    if (!get_inode(file->inode_index, &inodeOfFile)) {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+
+    //Check if we need to extend the file in any way
+    if (bytepos > inodeOfFile.file_size) {
+        unsigned long old_size = inodeOfFile.file_size;
+        unsigned long old_last_blk;
+        unsigned long new_last_blk;
+
+        if (old_size == 0) {
+            old_last_blk = -1;
+        }
+        else {
+            old_last_blk = (old_size - 1) / SOFTWARE_DISK_BLOCK_SIZE;
+        }
+
+        if (bytepos == 0) {
+            new_last_blk = 0;
+        }
+        else {
+            new_last_blk = (bytepos - 1) / SOFTWARE_DISK_BLOCK_SIZE;
+        }
+
+        for (unsigned long blk = old_last_blk + 1; blk <= new_last_blk; blk++) {
+            if (blk < NUM_DIRECT_INODE_BLOCKS) {
+                if (inodeOfFile.direct_blocks[blk] == 0) {
+                    int new_blk = find_free_data_block();
+                    if (new_blk == -1) {
+                        fserror = FS_OUT_OF_SPACE;
+                        return 0;
+                    }
+                    allocate_data_block(new_blk);
+                    inodeOfFile.direct_blocks[blk] = new_blk;
+                }
+            }
+            else {
+                if (inodeOfFile.indirect_block == 0) {
+                    int new_indir = find_free_data_block();
+                    if (new_indir == -1) {
+                        fserror = FS_OUT_OF_SPACE;
+                        return 0;
+                    }
+                    allocate_data_block(new_indir);
+                    inodeOfFile.indirect_block = new_indir;
+
+                    int zeros[NUM_SINGLE_INDIRECT_BLOCKS] = {0};
+                    write_sd_block(zeros, new_indir);
+                }
+                int indir_blk_array[NUM_SINGLE_INDIRECT_BLOCKS];
+                read_sd_block(indir_blk_array, inodeOfFile.indirect_block);
+                int indir_indx = blk - NUM_DIRECT_INODE_BLOCKS;
+                if (indir_blk_array[indir_indx] == 0) {
+                    int new_blk = find_free_data_block();
+                    if (new_blk == -1) {
+                        fserror = FS_OUT_OF_SPACE;
+                        return 0;
+                    }
+                    allocate_data_block(new_blk);
+                    indir_blk_array[indir_indx] = new_blk;
+                    write_sd_block(indir_blk_array, inodeOfFile.indirect_block);
+                }
+            }
+        }
+        inodeOfFile.file_size = bytepos;
+        write_inode(file->inode_index, &inodeOfFile);
+    }
+    file->position = bytepos;
+
+    fserror = FS_NONE;
+    return 1;
 }
 
 // returns the current length of the file in bytes. Always sets
