@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "filesystem.c"
-#include "softwaredisk.c"
+#include "filesystem.h"
+#include "softwaredisk.h"
 
 // RUN formatfs before conducting this test then run testfs4b *after* this test
   

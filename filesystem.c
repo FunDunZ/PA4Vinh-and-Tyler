@@ -8,6 +8,7 @@
 //Define a new minimum function
   #define min(a, b) ((a) < (b) ? (a) : (b))
 
+
 // Define the global error variable
 FSError fserror = FS_NONE;
 
@@ -18,6 +19,8 @@ struct FileInternals {
 
 };
 
+//Define array of open files 
+static struct FileInternals* open_files_list[128] = {NULL};
 
 // open existing file with pathname 'name' and access mode 'mode'.
 // Current file position is set to byte 0.  Returns NULL on
@@ -51,6 +54,7 @@ File open_file(char *name, FileMode mode) {
     exFile->user_mode = mode;
     exFile->position = 0;
 
+    open_files_list[inode_num] = exFile;
 
     fserror = FS_NONE;
     return (File)exFile;
@@ -79,7 +83,6 @@ File create_file(char *name) {
         return NULL;
     }
  
-
     //Now that we have created the directory entry we need to create the new inode
     int inode_num = find_free_inode();
     if (inode_num == -1) {
@@ -119,6 +122,8 @@ File create_file(char *name) {
     exFile->user_mode = READ_WRITE;
     exFile->position = 0;
 
+    //Now we add the file to make it open
+    open_files_list[inode_num] = exFile;
     //Now that we have created our new file, we return the pointer to the file
     fserror = FS_NONE;
     return (File)exFile;
@@ -132,11 +137,21 @@ void close_file(File file) {
         return;
     }
 
-    //Now that we have confirmed that the file is valid, we free it and proceed
-    free(file);
-
-    fserror = FS_NONE;
+    //Now we check to make sure the file is open
+    for (int i = 0; i < sizeof(open_files_list); i++) {
+        if (open_files_list[i] == file) {
+            //This means we found the file in the open files list
+            //So we free the file, set the error to none and break out of the loop
+            free(file);
+            fserror = FS_NONE;
+            break;
+        }
+        else {
+            fserror = FS_FILE_NOT_OPEN;
+        }
+    }
     return;
+
 }
 
 // read at most 'numbytes' of data from 'file' into 'buf', starting at the 
@@ -149,6 +164,7 @@ unsigned long read_file(File file, void *buf, unsigned long numbytes) {
         fserror = FS_FILE_NOT_OPEN;
         return 0;
     }
+    
 
     //Now we need to get the indoe so that way we can get the information
     Inode inodeOfFile;
@@ -467,9 +483,6 @@ int delete_file(char *name) {
         fserror = FS_FILE_NOT_FOUND;
         return 0;
     }
-
-    //***** I THINK WE NEED TO CHECK IF THE FILE IS OPEN, BUT IDK HOW
-
 
     //Now we have confirmed that the file exists and the name is valid
     //Now we must proceed with the deletion
